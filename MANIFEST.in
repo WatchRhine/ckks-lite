@@ -1,0 +1,8 @@
+include README.md
+include LICENSE
+include pyproject.toml
+include tools/env_check.py
+include tools/build_env_check_exe.bat
+recursive-include src/ckks_lite/_bin *.exe
+recursive-include tests *.py
+recursive-include examples *.py
