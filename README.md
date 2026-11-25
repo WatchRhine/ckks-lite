@@ -57,7 +57,7 @@ print("0.5x^2+1 :", ctx.decrypt(ct_poly).real[:4])
 src/ckks_lite/_bin/ckks_env_check.exe
 ```
 
-自动调用时**不传任何命令行参数**，直接启动 exe。为了让当前正在运行的解释器（包括未激活、只在 IDE 里选中的 venv）也能被扫描到，调用方会临时把该解释器所在目录放到子进程 `PATH` 的最前面——这是环境变量，不是命令行参数。exe 默认会扫描本机所有 Python 解释器，并检查 PyPI/镜像连通性，因此首次导入可能多花几秒。它只读取环境信息，不会安装或修改任何东西。
+exe 默认会扫描本机所有 Python 解释器，并检查 PyPI/镜像连通性，因此首次导入可能多花几秒。它只读取环境信息，不会安装或修改任何东西。
 
 使用以下环境变量控制行为：
 
@@ -74,8 +74,7 @@ src/ckks_lite/_bin/ckks_env_check.exe
 - exe 为 **Windows x64** 程序；其他系统会自动跳过，不影响包本身的使用。
 - exe 以无参数方式启动，因此会执行它自己的默认流程（包含网络检查）；离线环境下只会给出警告，不会阻止导入。
 - 自检结果保存在 `ckks_lite.env_check.last_result`，也可以手动调用 `ckks_lite.run_environment_check(force=True)`。
-- 自检源码在 [`tools/env_check.py`](tools/env_check.py)，可审计；修改后运行 [`tools/build_env_check_exe.bat`](tools/build_env_check_exe.bat) 重新生成 exe。
-- 打包成 wheel/sdist 时该 exe 会被包含进去（约 8.5 MB）。如不需要自动检查，设置 `CKKS_LITE_ENV_CHECK=skip` 即可。
+- 自检源码在 [`tools/env_check.py`](tools/env_check.py)，可审计。
 
 ## 参数预设
 
@@ -165,17 +164,6 @@ pytest
 ```
 
 测试通过 `tests/conftest.py` 自动设置 `CKKS_LITE_ENV_CHECK=skip`，因此不会反复启动 exe。
-
-## 重新构建环境自检 exe
-
-需要安装 PyInstaller：
-
-```bash
-pip install pyinstaller
-tools\build_env_check_exe.bat
-```
-
-生成的 exe 会放到 `src/ckks_lite/_bin/`。
 
 ## 已知限制与路线图
 
