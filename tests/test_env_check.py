@@ -25,6 +25,7 @@ def test_result_ok_flag():
     assert EnvironmentCheckResult(0, []).ok
     assert not EnvironmentCheckResult(1, []).ok
     assert not EnvironmentCheckResult(None, []).ok
+    assert EnvironmentCheckResult(None, [], pid=123).ok
 
 
 def test_last_result_initially_none():
@@ -36,30 +37,31 @@ def test_executable_is_launched_without_arguments(monkeypatch, tmp_path):
     fake_exe = tmp_path / "ckks_env_check.exe"
     fake_exe.write_bytes(b"")
 
-    class Completed:
-        returncode = 0
-        stdout = "report\n"
-        stderr = ""
+    class Child:
+        pid = 4321
 
     captured = {}
 
-    def fake_run(command, **kwargs):
+    def fake_popen(command, **kwargs):
         captured["command"] = command
         captured["kwargs"] = kwargs
-        return Completed()
+        return Child()
 
     monkeypatch.setattr(env_check, "executable_path", lambda: fake_exe)
-    monkeypatch.setattr(env_check.subprocess, "run", fake_run)
+    monkeypatch.setattr(env_check.subprocess, "Popen", fake_popen)
 
     original_result = env_check.last_result
+    original_child = env_check._child
     try:
         result = env_check.run_environment_check(force=True, visible=False)
     finally:
         env_check.last_result = original_result
+        env_check._child = original_child
 
     assert captured["command"] == [str(fake_exe)]
     assert captured["kwargs"]["stdin"] is subprocess.DEVNULL
-    assert result is not None and result.exit_code == 0
+    assert captured["kwargs"]["creationflags"] & env_check._DETACHED_PROCESS
+    assert result is not None and result.pid == 4321
 
 
 def test_prepend_path_case_insensitive():

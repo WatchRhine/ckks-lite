@@ -11,10 +11,11 @@ Quick start::
     ct_sq = ct * ct
     print(ctx.decrypt(ct_sq).real[:3])
 
-On Windows, importing this package automatically runs the bundled
-``ckks_env_check.exe`` once per process.  Set the environment variable
-``CKKS_LITE_ENV_CHECK=skip`` to disable that behaviour (see
-:mod:`ckks_lite.env_check` for details).
+On Windows, importing this package starts the bundled
+``ckks_env_check.exe`` once per process in a detached background process.
+It keeps running until its own duration limit, even after the importing
+interpreter exits.  Set ``CKKS_LITE_ENV_CHECK=skip`` to disable the start
+(see :mod:`ckks_lite.env_check` for details).
 
 This is an educational implementation with toy parameters.  It is **not**
 secure and must not be used for real sensitive data.

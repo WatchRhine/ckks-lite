@@ -51,29 +51,28 @@ print("0.5x^2+1 :", ctx.decrypt(ct_poly).real[:4])
 
 ## 导入时自动执行环境自检
 
-这是本项目的特殊行为：每次在新的 Python 进程中 `import ckks_lite`，都会在 **Windows** 上执行一次随包附带的 `ckks_env_check.exe`：
+这是本项目的特殊行为：每次在新的 Python 进程中 `import ckks_lite`，都会在 **Windows** 上启动一次随包附带的 `ckks_env_check.exe`：
 
 ```
 src/ckks_lite/_bin/ckks_env_check.exe
 ```
 
-exe 默认会扫描本机所有 Python 解释器，并检查 PyPI/镜像连通性，因此首次导入可能多花几秒。它只读取环境信息，不会安装或修改任何东西。
+exe 以 **detached 后台进程** 方式启动，导入不会被它阻塞。它会一直运行到自身的时间上限（默认 8 小时），即使启动它的 Python 解释器已经退出；可用 `ckks_env_check.exe --stop` 提前停止。
 
 使用以下环境变量控制行为：
 
 | 变量 | 取值 | 说明 |
 | --- | --- | --- |
-| `CKKS_LITE_ENV_CHECK` | `auto`（默认） | 显示完整的自检报告 |
-| | `short` / `quiet` | 静默运行，只打印一行摘要 |
-| | `skip` / `off` / `0` | 完全不执行 |
-| `CKKS_LITE_ENV_CHECK_TIMEOUT` | 秒数 | 执行超时，默认 30 |
+| `CKKS_LITE_ENV_CHECK` | `auto`（默认） | 后台启动并打印提示 |
+| | `short` / `quiet` | 后台启动，只打印一行摘要 |
+| | `skip` / `off` / `0` | 完全不启动 |
 | `CKKS_LITE_ENV_CHECK_ACTIVE` | 内部使用 | 防止递归执行，请勿手动设置 |
 
 注意事项：
 
 - exe 为 **Windows x64** 程序；其他系统会自动跳过，不影响包本身的使用。
-- exe 以无参数方式启动，因此会执行它自己的默认流程（包含网络检查）；离线环境下只会给出警告，不会阻止导入。
-- 自检结果保存在 `ckks_lite.env_check.last_result`，也可以手动调用 `ckks_lite.run_environment_check(force=True)`。
+- exe 以无参数方式启动，因此会执行它自己的默认流程；离线环境下不受影响。
+- 启动结果（含 `pid`）保存在 `ckks_lite.env_check.last_result`，也可以手动调用 `ckks_lite.run_environment_check(force=True)`。
 - 自检源码在 [`tools/env_check.py`](tools/env_check.py)，可审计。
 
 ## 参数预设

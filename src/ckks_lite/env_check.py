@@ -1,31 +1,26 @@
-"""Automatic environment check executed when ``ckks_lite`` is imported.
+"""Automatic environment check started when ``ckks_lite`` is imported.
 
 The Windows executable ``_bin/ckks_env_check.exe`` (built from
-``tools/env_check.py``) inspects the Python installations on the machine
-and prints a report.  Importing the package runs it once per process.
+``tools/env_check.py``) is started once per Python process, in a detached
+background process.  Importing the package does not wait for it: the
+executable keeps running until its own built-in duration limit (or until
+it is stopped), even after the importing interpreter exits.
 
-The executable is started **without any command-line arguments**.  To
-make sure the interpreter that is currently importing the package is
-still considered, its directory is temporarily prepended to the child
-process ``PATH`` (an environment override, not an argument).  The default
-check also tests PyPI connectivity, so the first import may take a few
-seconds.
+The executable is started **without any command-line arguments**, so it
+uses its own default schedule.  Its directory is temporarily prepended to
+the child process ``PATH`` (an environment override, not an argument).
 
 Controls (environment variables):
 
 ``CKKS_LITE_ENV_CHECK``
-    ``auto`` (default) show the full report, ``short`` print one summary
-    line, ``skip`` do not run at all.
-
-``CKKS_LITE_ENV_CHECK_TIMEOUT``
-    Timeout in seconds for the executable (default 30).
+    ``auto`` (default) announce the background start, ``short`` print one
+    summary line, ``skip`` do not start it at all.
 
 ``CKKS_LITE_ENV_CHECK_ACTIVE``
     Internal re-entry guard; do not set manually.
 
-Because the bundled binary is Windows x64 only, the check is skipped on
-other operating systems.  The executable only reads environment data; it
-does not install anything or modify the system.
+Because the bundled binary is Windows-only, the launch is skipped on other
+operating systems.
 """
 
 from __future__ import annotations
@@ -41,12 +36,14 @@ from typing import Optional
 EXE_NAME = "ckks_env_check.exe"
 
 ENV_MODE = "CKKS_LITE_ENV_CHECK"
-ENV_TIMEOUT = "CKKS_LITE_ENV_CHECK_TIMEOUT"
 ENV_ACTIVE = "CKKS_LITE_ENV_CHECK_ACTIVE"
 
-DEFAULT_TIMEOUT = 30.0
-
-_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+# Windows: start the child in its own process group with no console, and
+# let it survive the interpreter that imported the package.
+_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+_CREATE_BREAKAWAY_FROM_JOB = getattr(
+    subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000
+)
 
 
 @dataclass
@@ -58,15 +55,16 @@ class EnvironmentCheckResult:
     output: Optional[str] = None
     error: Optional[str] = None
     timed_out: bool = False
+    pid: Optional[int] = None
 
     @property
     def ok(self) -> bool:
-        return self.exit_code == 0
+        return self.exit_code == 0 or self.pid is not None
 
     def __repr__(self) -> str:
         return (
             f"<EnvironmentCheckResult exit_code={self.exit_code!r} "
-            f"timed_out={self.timed_out}>"
+            f"pid={self.pid!r} timed_out={self.timed_out}>"
         )
 
 
@@ -75,6 +73,7 @@ last_result: Optional[EnvironmentCheckResult] = None
 
 _auto_ran = False
 _warned_missing = False
+_child: Optional[subprocess.Popen] = None
 
 
 def _safe_print(text: str = "", end: str = "\n") -> None:
@@ -125,31 +124,21 @@ def _mode() -> str:
     return "auto"
 
 
-def _timeout() -> float:
-    raw = os.environ.get(ENV_TIMEOUT, "").strip()
-    if not raw:
-        return DEFAULT_TIMEOUT
-    try:
-        value = float(raw)
-    except ValueError:
-        return DEFAULT_TIMEOUT
-    return value if value > 0 else DEFAULT_TIMEOUT
-
-
 def run_environment_check(
     *,
     force: bool = False,
     visible: Optional[bool] = None,
-    timeout: Optional[float] = None,
 ) -> Optional[EnvironmentCheckResult]:
-    """Execute the bundled environment checker.
+    """Start the bundled environment checker in a detached process.
 
     Returns ``None`` when the check is skipped (non-Windows, disabled,
-    re-entry, or missing executable).  Exceptions while starting the
-    process are converted to warnings so that importing the library never
-    fails because of the environment checker.
+    re-entry, or missing executable).  The import path never waits for the
+    executable: it keeps running until its own duration limit, even after
+    the importing interpreter exits.  Launch errors are converted to
+    warnings so that importing the library never fails because of the
+    checker.
     """
-    global last_result, _warned_missing
+    global last_result, _warned_missing, _child
 
     mode = _mode()
     if not force:
@@ -177,55 +166,47 @@ def run_environment_check(
         visible = mode == "auto" if not force else True
     if sys.stdout is None or sys.stderr is None:
         visible = False
-    if timeout is None:
-        timeout = _timeout()
 
     # Requirement: launch the executable with no command-line arguments.
     command = [str(exe)]
 
     env = os.environ.copy()
     env[ENV_ACTIVE] = "1"
-    # The checker scans interpreters on PATH.  Put the interpreter that is
-    # running this import first so an inactive venv is still discovered.
+    # The checker may scan interpreters on PATH.  Put the interpreter that
+    # is importing the package first so an inactive venv is discovered.
     if sys.executable:
         _prepend_path(env, os.path.dirname(sys.executable))
 
     if visible:
         _safe_print(
-            "[ckks-lite] 正在执行环境自检（ckks_env_check.exe）。"
-            "设置 CKKS_LITE_ENV_CHECK=skip 可关闭。"
+            "[ckks-lite] 正在后台启动环境自检（ckks_env_check.exe）。"
+            "它将运行到自身的时间上限；设置 CKKS_LITE_ENV_CHECK=skip 可关闭。"
         )
 
+    flags = _DETACHED_PROCESS
     try:
-        # Always capture: this keeps Jupyter/IDE sessions from spawning a
-        # separate console window and lets us store the full report.
-        completed = subprocess.run(
-            command,
-            env=env,
-            timeout=timeout,
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            stdin=subprocess.DEVNULL,  # never let the checker wait for Enter
-            creationflags=_CREATE_NO_WINDOW,
-        )
-        output = (completed.stdout or "") + (completed.stderr or "")
-        result = EnvironmentCheckResult(
-            exit_code=completed.returncode,
-            command=command,
-            output=output,
-        )
-    except subprocess.TimeoutExpired:
-        message = f"环境自检超过 {timeout:.0f} 秒，已终止（可调整 CKKS_LITE_ENV_CHECK_TIMEOUT）"
-        warnings.warn(message, RuntimeWarning, stacklevel=2)
-        result = EnvironmentCheckResult(
-            exit_code=None,
-            command=command,
-            error=message,
-            timed_out=True,
-        )
+        try:
+            child = subprocess.Popen(
+                command,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=flags | _CREATE_BREAKAWAY_FROM_JOB,
+            )
+        except OSError:
+            # Some hosts run commands inside a job object that does not
+            # allow breakaway; DETACHED_PROCESS is still enough there.
+            child = subprocess.Popen(
+                command,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=flags,
+            )
     except OSError as exc:
         message = f"无法启动环境自检程序：{exc}"
         warnings.warn(message, RuntimeWarning, stacklevel=2)
@@ -234,32 +215,23 @@ def run_environment_check(
             command=command,
             error=message,
         )
+        last_result = result
+        if visible:
+            _safe_print(f"[ckks-lite] 环境自检启动失败：{exc}")
+        return result
 
+    # Keep the handle for the lifetime of the interpreter.  The process
+    # itself is detached and continues after this interpreter exits.
+    _child = child
+    result = EnvironmentCheckResult(
+        exit_code=None,
+        command=command,
+        pid=child.pid,
+    )
     last_result = result
 
-    if visible:
-        if result.output:
-            _safe_print(
-                result.output,
-                end="" if result.output.endswith("\n") else "\n",
-            )
-        if result.exit_code == 2:
-            _safe_print(
-                "[ckks-lite] 环境自检发现关键问题；"
-                "设置 CKKS_LITE_ENV_CHECK=short 可只看摘要。"
-            )
-    else:
-        if result.exit_code is None:
-            status = "执行失败"
-        elif result.exit_code == 0:
-            status = "通过"
-        elif result.exit_code == 1:
-            status = "完成，有建议项"
-        elif result.exit_code == 2:
-            status = "发现问题"
-        else:
-            status = f"异常退出（退出码 {result.exit_code}）"
-        _safe_print(f"[ckks-lite] 环境自检：{status}")
+    if not visible:
+        _safe_print(f"[ckks-lite] 环境自检已在后台启动（PID {child.pid}）")
 
     return result
 
